@@ -49,6 +49,7 @@ struct it6251_bridge {
 #define IT6251_VENDOR_ID_HIGH				0x01
 #define IT6251_DEVICE_ID_LOW				0x02
 #define IT6251_DEVICE_ID_HIGH				0x03
+#define IT6251_REG_RESET                                0x05
 #define IT6251_SYSTEM_STATUS				0x0d
 #define IT6251_SYSTEM_STATUS_RINTSTATUS			(1 << 0)
 #define IT6251_SYSTEM_STATUS_RHPDSTATUS			(1 << 1)
@@ -65,8 +66,14 @@ struct it6251_bridge {
 #define IT6251_REF_STATE_NORMAL_OPERATION		(1 << 4)
 #define IT6251_REF_STATE_MUTED				(1 << 5)
 
-#define IT6251_REG_PCLK_CNT_LOW				0x57
-#define IT6251_REG_PCLK_CNT_HIGH			0x58
+#define IT6251_CLKBUF_PCLK_CNT_LOW                      0x13
+#define IT6251_CLKBUF_PCLK_CNT_HIGH                     0x14
+
+#define IT6251_LVDSRX_REG_RESET                         0x05
+#define IT6251_LVDSRX_REG_PCLK_CNT_LOW		        0x57
+#define IT6251_LVDSRX_REG_PCLK_CNT_HIGH			0x58
+
+#define IT6251_PCLK_CNT_MASK 0x0FFF
 
 #define INIT_RETRY_DELAY_START msecs_to_jiffies(50)
 #define INIT_RETRY_DELAY_MAX msecs_to_jiffies(3000)
@@ -76,16 +83,20 @@ struct it6251_bridge {
 /* HW access functions */
 
 static int
+it6251_write_reg_silent(struct i2c_client *client, uint8_t addr, uint8_t val)
+{
+	uint8_t buf[2] = {addr, val};
+	return i2c_master_send(client, buf, ARRAY_SIZE(buf));
+}
+
+static int
 it6251_write(struct it6251_bridge *priv, uint8_t addr, uint8_t val)
 {
 	struct i2c_client *client = priv->client;
-	uint8_t buf[2] = {addr, val};
-	int ret;
-
-	ret = i2c_master_send(client, buf, ARRAY_SIZE(buf));
+	int ret = it6251_write_reg_silent(client, addr, val);
 	if (ret < 0) {
 		dev_err(&client->dev, "error %d writing to edp addr 0x%x\n",
-			   ret, addr);
+			ret, addr);
 		return -1;
 	}
 	return 0;
@@ -95,10 +106,7 @@ static int
 it6251_lvds_write(struct it6251_bridge *priv, uint8_t addr, uint8_t val)
 {
 	struct i2c_client *client = priv->lvds_client;
-	uint8_t buf[2] = {addr, val};
-	int ret;
-
-	ret = i2c_master_send(client, buf, ARRAY_SIZE(buf));
+	int ret = it6251_write_reg_silent(client, addr, val);
 	if (ret < 0) {
 		dev_err(&client->dev, "error %d writing to lvds addr 0x%x\n",
 			   ret, addr);
@@ -160,16 +168,18 @@ static int it6251_is_stable(struct it6251_bridge *priv)
 	int rpclkcnt;
 	int refstate;
 
-	rpclkcnt = ((it6251_read(priv, 0x13) & 0xff)
-		| ((it6251_read(priv, 0x14) << 8) & 0x0f00));
-	dev_info(&priv->client->dev, "RPCLKCnt: %d\n", rpclkcnt);
+	rpclkcnt = ((it6251_read(priv, IT6251_CLKBUF_PCLK_CNT_LOW) & 0xf)
+		    | (it6251_read(priv, IT6251_CLKBUF_PCLK_CNT_HIGH) << 8))
+	  & IT6251_PCLK_CNT_MASK;
+	dev_info(&priv->client->dev, "CLKBUF RPCLKCnt: %d\n", rpclkcnt);
 
 	status = it6251_read(priv, IT6251_SYSTEM_STATUS);
 	dev_info(&priv->client->dev, "System status: 0x%02x\n", status);
 
-	clkcnt = ((it6251_lvds_read(priv, IT6251_REG_PCLK_CNT_LOW) & 0xff) |
-		 ((it6251_lvds_read(priv, IT6251_REG_PCLK_CNT_HIGH) << 8) & 0x0f00));
-	dev_info(&priv->client->dev, "Clock: 0x%02x\n", clkcnt);
+	clkcnt = ((it6251_lvds_read(priv, IT6251_LVDSRX_REG_PCLK_CNT_LOW) & 0xff)
+		  | (it6251_lvds_read(priv, IT6251_LVDSRX_REG_PCLK_CNT_HIGH) << 8))
+	  & IT6251_PCLK_CNT_MASK;
+	dev_info(&priv->client->dev, "LVDSRX Clock: 0x%02x\n", clkcnt);
 
 	refstate = it6251_read(priv, IT6251_REF_STATE);
 	dev_info(&priv->client->dev, "Ref Link State: 0x%02x\n", refstate);
@@ -201,7 +211,9 @@ static void it6251_init(struct work_struct *work)
 	struct it6251_bridge *priv = container_of(work, struct it6251_bridge,
 						  init_work.work);
 
-	it6251_write(priv, 0x05, 0x00);
+	it6251_write_reg_silent(priv->client, IT6251_REG_RESET, 0xFF);
+	udelay(1000);
+	it6251_write(priv, IT6251_REG_RESET, 0x00);
 	udelay(1000);
 
 	it6251_write(priv, 0xfd, 0xbc); // set LVDSRX address, and enable
@@ -209,10 +221,12 @@ static void it6251_init(struct work_struct *work)
 
 	// LVDSRX
 	/* This write always fails, because the chip goes into reset */
-	it6251_lvds_write(priv, 0x05, 0xff);   // reset LVDSRX
-	it6251_lvds_write(priv, 0x05, 0x00);
+	it6251_write_reg_silent(priv->lvds_client, IT6251_LVDSRX_REG_RESET, 0xFF);   // reset LVDSRX
+	udelay(1000);
+	it6251_lvds_write(priv, IT6251_LVDSRX_REG_RESET, 0x00);
 
 	it6251_lvds_write(priv, 0x3b, 0x42);  // reset LVDSRX PLL
+	udelay(1000);
 	it6251_lvds_write(priv, 0x3b, 0x43);
 
 	it6251_lvds_write(priv, 0x3c, 0x08);  // something with SSC PLL
@@ -223,8 +237,9 @@ static void it6251_init(struct work_struct *work)
 	it6251_lvds_write(priv, 0x35, 0xe0);  // "reserved"
 	it6251_lvds_write(priv, 0x2b, 0x24);  // "reserved" + clock delay
 
-	it6251_lvds_write(priv, 0x05, 0x02);  // reset LVDSRX pix clock
-	it6251_lvds_write(priv, 0x05, 0x00);
+	it6251_write_reg_silent(priv->lvds_client, IT6251_LVDSRX_REG_RESET, 0x02);  // reset LVDSRX pix clock
+	udelay(1000);
+	it6251_lvds_write(priv, IT6251_LVDSRX_REG_RESET, 0x00);
 
 	// DPTX
 	it6251_write(priv, 0x16, 0x02); // set for two lane mode, normal op, no swapping, no downspread
