@@ -464,6 +464,11 @@ it6251_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		goto err;
 	}
 
+	ret = sysfs_create_group(&priv->client->dev.kobj, &it6251_attr_group);
+	if(ret) {
+		dev_err(&priv->client->dev, "failed to register sysfs status attributes\n");
+	}
+
 	priv->delay_tries = 0;
 	priv->delay_jiffies = INIT_RETRY_DELAY_START;
 	schedule_delayed_work(&priv->init_work, priv->delay_jiffies);
@@ -494,8 +499,38 @@ static int it6251_remove(struct i2c_client *client)
 		return ret;
 	}
 
+	sysfs_remove_group(&client->dev.kobj,
+			   &it6251_attr_group);
+
 	return 0;
 }
+
+static ssize_t it6251_status_get(struct device *dev,
+				 struct device_attribute *attr,
+				 char *buf);
+
+static DEVICE_ATTR(it6251_status, S_IRUGO, it6251_status_get, NULL);
+
+static struct attribute *it6251_status_attrs[] = {
+	&dev_attr_it6251_status.attr,
+        NULL
+};
+
+static const struct attribute_group it6251_attr_group = {
+        .attrs = it6251_status_attrs,
+};
+
+static ssize_t it6251_status_get(struct device *dev,
+				 struct device_attribute *attr,
+				 char *buf)
+{
+        struct i2c_client *client = container_of(dev, struct i2c_client, dev);
+	struct it6251_bridge *priv = i2c_get_clientdata(client);
+
+	int status = it6251_read(priv, IT6251_SYSTEM_STATUS);
+	return sprintf(buf, "%02x\n", status);
+}
+
 
 static SIMPLE_DEV_PM_OPS(it6251_dev_pm_ops,
 			it6251_suspend, it6251_resume);
