@@ -69,7 +69,17 @@ struct it6251_bridge {
 #define IT6251_CLKBUF_PCLK_CNT_LOW                      0x13
 #define IT6251_CLKBUF_PCLK_CNT_HIGH                     0x14
 
+#define IT6251_REG_AUX_TRAINING                         0x9f
+#define IT6251_AUX_TRAINING_OK                          0x00
+#define IT6251_AUX_TRAINING_DEFER                       0x01
+#define IT6251_AUX_TRAINING_NAK                         0x02
+#define IT6251_AUX_TRAINING_TIMEOUT                     0x03
+
 #define IT6251_LVDSRX_REG_RESET                         0x05
+#define IT6251_LVDSRX_REG_STABLE                        0x30
+#define IT6251_LVDSRX_STABLE_VIDEO                      (1 << 0)
+#define IT6251_LVDSRX_STABLE_PCLK_LOCK                  (1 << 1)
+
 #define IT6251_LVDSRX_REG_PCLK_CNT_LOW		        0x57
 #define IT6251_LVDSRX_REG_PCLK_CNT_HIGH			0x58
 
@@ -79,6 +89,8 @@ struct it6251_bridge {
 #define INIT_RETRY_DELAY_MAX msecs_to_jiffies(3000)
 #define INIT_RETRY_DELAY_INC msecs_to_jiffies(50)
 #define INIT_RETRY_MAX_TRIES 20
+
+static const struct attribute_group it6251_attr_group;
 
 /* HW access functions */
 
@@ -167,14 +179,19 @@ static int it6251_is_stable(struct it6251_bridge *priv)
 	int clkcnt;
 	int rpclkcnt;
 	int refstate;
+	int lvdsstate;
+        int auxstate;
 
 	rpclkcnt = ((it6251_read(priv, IT6251_CLKBUF_PCLK_CNT_LOW) & 0xf)
 		    | (it6251_read(priv, IT6251_CLKBUF_PCLK_CNT_HIGH) << 8))
 	  & IT6251_PCLK_CNT_MASK;
-	dev_info(&priv->client->dev, "CLKBUF RPCLKCnt: %d\n", rpclkcnt);
+	dev_info(&priv->client->dev, "DPTX RPCLKCnt: %d\n", rpclkcnt);
 
 	status = it6251_read(priv, IT6251_SYSTEM_STATUS);
 	dev_info(&priv->client->dev, "System status: 0x%02x\n", status);
+
+	lvdsstate = it6251_lvds_read(priv, IT6251_LVDSRX_REG_STABLE);
+	dev_info(&priv->client->dev, "LVDSRX status: 0x%02x\n", lvdsstate);
 
 	clkcnt = ((it6251_lvds_read(priv, IT6251_LVDSRX_REG_PCLK_CNT_LOW) & 0xff)
 		  | (it6251_lvds_read(priv, IT6251_LVDSRX_REG_PCLK_CNT_HIGH) << 8))
@@ -183,6 +200,10 @@ static int it6251_is_stable(struct it6251_bridge *priv)
 
 	refstate = it6251_read(priv, IT6251_REF_STATE);
 	dev_info(&priv->client->dev, "Ref Link State: 0x%02x\n", refstate);
+
+	auxstate = it6251_read(priv, IT6251_REG_AUX_TRAINING);
+	dev_info(&priv->client->dev, "eDP AUX Training State: 0x%02x\n", auxstate);
+
 
 //	if (rpclkcnt != 2260)
 //		return 0;
