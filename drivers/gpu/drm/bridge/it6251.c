@@ -171,13 +171,14 @@ static int it6251_is_stable(struct it6251_bridge *priv)
 		 ((it6251_lvds_read(priv, IT6251_REG_PCLK_CNT_HIGH) << 8) & 0x0f00));
 	dev_info(&priv->client->dev, "Clock: 0x%02x\n", clkcnt);
 
-	refstate = it6251_lvds_read(priv, IT6251_REF_STATE);
+	refstate = it6251_read(priv, IT6251_REF_STATE);
 	dev_info(&priv->client->dev, "Ref Link State: 0x%02x\n", refstate);
 
 //	if (rpclkcnt != 2260)
 //		return 0;
 
-	if ((refstate & 0x1f) != 0)
+	/* if ref link state doesn't indicate normal operation, that's a failure */
+	if ((refstate & IT6251_REF_STATE_NORMAL_OPERATION) == 0)
 		return 0;
 
 	/* If video is muted, that's a failure */
